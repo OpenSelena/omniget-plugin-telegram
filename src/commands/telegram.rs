@@ -209,17 +209,17 @@ pub async fn telegram_download_media(
             percent: 0.0,
         });
 
-        let (tx, mut rx) = mpsc::channel::<f64>(32);
+        let (tx, mut rx) = mpsc::channel::<omniget_core::models::progress::ProgressUpdate>(32);
 
         let app_progress = app.clone();
         let file_name_progress = file_name_clone.clone();
         let progress_forwarder = tokio::spawn(async move {
-            while let Some(percent) = rx.recv().await {
+            while let Some(update) = rx.recv().await {
                 let _ = app_progress.emit("generic-download-progress", &GenericDownloadProgress {
                     id: download_id,
                     title: file_name_progress.clone(),
                     platform: "telegram".to_string(),
-                    percent,
+                    percent: update.percent,
                 });
             }
         });
@@ -409,16 +409,16 @@ pub async fn telegram_download_batch(
                     error: None,
                 });
 
-                let (tx, mut rx) = mpsc::channel::<f64>(32);
+                let (tx, mut rx) = mpsc::channel::<omniget_core::models::progress::ProgressUpdate>(32);
 
                 let app_progress = app.clone();
                 let progress_forwarder = tokio::spawn(async move {
-                    while let Some(percent) = rx.recv().await {
+                    while let Some(update) = rx.recv().await {
                         let _ = app_progress.emit("telegram-batch-file-status", &BatchFileStatus {
                             batch_id,
                             message_id: item.message_id,
                             status: "downloading".to_string(),
-                            percent,
+                            percent: update.percent,
                             error: None,
                         });
                     }

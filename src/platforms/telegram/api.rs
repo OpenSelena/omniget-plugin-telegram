@@ -497,7 +497,7 @@ pub async fn download_media(
     chat_type: &str,
     message_id: i32,
     output_path: &Path,
-    progress_tx: mpsc::Sender<f64>,
+    progress_tx: mpsc::Sender<omniget_core::models::progress::ProgressUpdate>,
     cancel_token: &CancellationToken,
 ) -> anyhow::Result<u64> {
     let _t = std::time::Instant::now();
@@ -603,7 +603,7 @@ pub async fn download_media_with_retry(
     chat_type: &str,
     message_id: i32,
     output_path: &Path,
-    progress_tx: mpsc::Sender<f64>,
+    progress_tx: mpsc::Sender<omniget_core::models::progress::ProgressUpdate>,
     cancel_token: &CancellationToken,
 ) -> anyhow::Result<u64> {
     let _t = std::time::Instant::now();
