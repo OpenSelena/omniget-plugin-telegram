@@ -174,7 +174,7 @@ pub async fn download_file(
     client: &Client,
     media: &MediaLocation,
     output_path: &Path,
-    progress_tx: mpsc::Sender<f64>,
+    progress_tx: mpsc::Sender<omniget_core::models::progress::ProgressUpdate>,
     cancel_token: &CancellationToken,
 ) -> anyhow::Result<u64> {
     tracing::info!(
@@ -217,7 +217,7 @@ pub async fn download_file(
 
                 if media.size > 0 {
                     let percent = (downloaded as f64 / media.size as f64) * 100.0;
-                    let _ = progress_tx.send(percent.min(100.0)).await;
+                    let _ = progress_tx.send(omniget_core::models::progress::ProgressUpdate::percent(percent.min(100.0))).await;
                 }
 
                 if f.bytes.len() < MAX_CHUNK_SIZE as usize {

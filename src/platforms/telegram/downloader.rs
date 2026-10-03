@@ -171,7 +171,7 @@ impl PlatformDownloader for TelegramDownloader {
         &self,
         info: &MediaInfo,
         opts: &DownloadOptions,
-        progress: mpsc::Sender<f64>,
+        progress: tokio::sync::mpsc::Sender<omniget_core::models::progress::ProgressUpdate>,
     ) -> anyhow::Result<DownloadResult> {
         let _t = std::time::Instant::now();
         let quality = info
@@ -265,7 +265,7 @@ impl PlatformDownloader for TelegramDownloader {
             match result {
                 Ok(size) => {
                     tokio::fs::rename(&tmp_path, &output_path).await?;
-                    let _ = progress.send(100.0).await;
+                    let _ = progress.send(omniget_core::models::progress::ProgressUpdate::percent(100.0)).await;
                     tracing::info!(
                         "[tg-dl] download completed in {:?}, {} bytes",
                         _t.elapsed(), size
