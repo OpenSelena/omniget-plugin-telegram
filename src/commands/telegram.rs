@@ -1,17 +1,25 @@
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use tauri::Emitter;
 use tokio::sync::{mpsc, Semaphore};
 use tokio_util::sync::CancellationToken;
 
 use base64::Engine;
+use omniget_plugin_sdk::PluginHost;
 
 use crate::platforms::telegram::api::{self, TelegramChat, TelegramMediaItem};
 use crate::platforms::telegram::auth::{self, QrPollStatus, VerifyError};
 use crate::platforms::telegram::thumbnail_cache;
 use crate::settings_helper;
 use crate::state::TelegramPluginState;
+
+fn emit_event<T: Serialize>(host: &Option<Arc<dyn PluginHost>>, name: &str, payload: &T) {
+    if let Some(h) = host {
+        if let Ok(val) = serde_json::to_value(payload) {
+            let _ = h.emit_event(name, val);
+        }
+    }
+}
 
 #[derive(Clone, Serialize)]
 struct GenericDownloadProgress {
@@ -39,9 +47,8 @@ pub struct TelegramDownloadStarted {
     pub file_name: String,
 }
 
-#[tauri::command]
 pub async fn telegram_check_session(
-    state: tauri::State<'_, TelegramPluginState>,
+    state: &TelegramPluginState,
 ) -> Result<String, String> {
     auth::check_session(&state.telegram_session)
         .await
@@ -54,9 +61,8 @@ pub struct QrStartResponse {
     pub expires: i32,
 }
 
-#[tauri::command]
 pub async fn telegram_qr_start(
-    state: tauri::State<'_, TelegramPluginState>,
+    state: &TelegramPluginState,
 ) -> Result<QrStartResponse, String> {
     let result = auth::qr_login_start(&state.telegram_session)
         .await
@@ -67,9 +73,8 @@ pub async fn telegram_qr_start(
     })
 }
 
-#[tauri::command]
 pub async fn telegram_qr_poll(
-    state: tauri::State<'_, TelegramPluginState>,
+    state: &TelegramPluginState,
 ) -> Result<String, String> {
     match auth::qr_login_poll(&state.telegram_session).await {
         Ok(QrPollStatus::Waiting) => Ok("waiting".to_string()),
@@ -85,9 +90,8 @@ pub async fn telegram_qr_poll(
     }
 }
 
-#[tauri::command]
 pub async fn telegram_send_code(
-    state: tauri::State<'_, TelegramPluginState>,
+    state: &TelegramPluginState,
     phone: String,
 ) -> Result<(), String> {
     auth::send_code(&state.telegram_session, &phone)
@@ -95,9 +99,8 @@ pub async fn telegram_send_code(
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
 pub async fn telegram_verify_code(
-    state: tauri::State<'_, TelegramPluginState>,
+    state: &TelegramPluginState,
     code: String,
 ) -> Result<String, String> {
     match auth::verify_code(&state.telegram_session, &code).await {
@@ -111,9 +114,8 @@ pub async fn telegram_verify_code(
     }
 }
 
-#[tauri::command]
 pub async fn telegram_verify_2fa(
-    state: tauri::State<'_, TelegramPluginState>,
+    state: &TelegramPluginState,
     password: String,
 ) -> Result<String, String> {
     auth::verify_password(&state.telegram_session, &password)
@@ -121,9 +123,8 @@ pub async fn telegram_verify_2fa(
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
 pub async fn telegram_logout(
-    state: tauri::State<'_, TelegramPluginState>,
+    state: &TelegramPluginState,
 ) -> Result<(), String> {
     thumbnail_cache::clear_cache().await;
     auth::logout(&state.telegram_session)
@@ -131,26 +132,23 @@ pub async fn telegram_logout(
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
 pub async fn telegram_list_chats(
-    state: tauri::State<'_, TelegramPluginState>,
+    state: &TelegramPluginState,
 ) -> Result<Vec<TelegramChat>, String> {
     api::list_chats(&state.telegram_session)
         .await
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
 pub async fn telegram_list_media(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, TelegramPluginState>,
+    state: &TelegramPluginState,
     chat_id: i64,
     chat_type: String,
     media_type: Option<String>,
     offset: i32,
     limit: u32,
 ) -> Result<Vec<TelegramMediaItem>, String> {
-    let fix_extensions = settings_helper::load_settings(&app).telegram.fix_file_extensions;
+    let fix_extensions = settings_helper::load_settings().telegram.fix_file_extensions;
     api::list_media(
         &state.telegram_session,
         chat_id,
@@ -164,10 +162,9 @@ pub async fn telegram_list_media(
     .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
 pub async fn telegram_download_media(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, TelegramPluginState>,
+    host: Option<Arc<dyn PluginHost>>,
+    state: &TelegramPluginState,
     chat_id: i64,
     chat_type: String,
     message_id: i32,
@@ -202,7 +199,7 @@ pub async fn telegram_download_media(
     tokio::spawn(async move {
         let output_path = std::path::PathBuf::from(&output_dir).join(&file_name_clone);
 
-        let _ = app.emit("generic-download-progress", &GenericDownloadProgress {
+        emit_event(&host, "generic-download-progress", &GenericDownloadProgress {
             id: download_id,
             title: file_name_clone.clone(),
             platform: "telegram".to_string(),
@@ -211,11 +208,11 @@ pub async fn telegram_download_media(
 
         let (tx, mut rx) = mpsc::channel::<omniget_core::models::progress::ProgressUpdate>(32);
 
-        let app_progress = app.clone();
+        let host_progress = host.clone();
         let file_name_progress = file_name_clone.clone();
         let progress_forwarder = tokio::spawn(async move {
             while let Some(update) = rx.recv().await {
-                let _ = app_progress.emit("generic-download-progress", &GenericDownloadProgress {
+                emit_event(&host_progress, "generic-download-progress", &GenericDownloadProgress {
                     id: download_id,
                     title: file_name_progress.clone(),
                     platform: "telegram".to_string(),
@@ -242,7 +239,7 @@ pub async fn telegram_download_media(
 
         match result {
             Ok(size) => {
-                let _ = app.emit("generic-download-complete", &GenericDownloadComplete {
+                emit_event(&host, "generic-download-complete", &GenericDownloadComplete {
                     id: download_id,
                     title: file_name_clone,
                     platform: "telegram".to_string(),
@@ -254,7 +251,7 @@ pub async fn telegram_download_media(
                 });
             }
             Err(e) => {
-                let _ = app.emit("generic-download-complete", &GenericDownloadComplete {
+                emit_event(&host, "generic-download-complete", &GenericDownloadComplete {
                     id: download_id,
                     title: file_name_clone,
                     platform: "telegram".to_string(),
@@ -287,10 +284,9 @@ struct BatchFileStatus {
     error: Option<String>,
 }
 
-#[tauri::command]
 pub async fn telegram_download_batch(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, TelegramPluginState>,
+    host: Option<Arc<dyn PluginHost>>,
+    state: &TelegramPluginState,
     chat_id: i64,
     chat_type: String,
     chat_title: String,
@@ -320,11 +316,11 @@ pub async fn telegram_download_batch(
     let total_files = items.len() as u32;
 
     // Read Telegram settings
-    let tg_settings = settings_helper::load_settings(&app).telegram;
+    let tg_settings = settings_helper::load_settings().telegram;
     let concurrent = tg_settings.concurrent_downloads.clamp(1, 10) as usize;
 
     // Emit initial 0% batch progress
-    let _ = app.emit("generic-download-progress", &GenericDownloadProgress {
+    emit_event(&host, "generic-download-progress", &GenericDownloadProgress {
         id: batch_id,
         title: chat_title.clone(),
         platform: "telegram".to_string(),
@@ -342,7 +338,7 @@ pub async fn telegram_download_batch(
         for item in items {
             let sem = semaphore.clone();
             let session = session.clone();
-            let app = app.clone();
+            let host = host.clone();
             let chat_type = chat_type.clone();
             let chat_title = chat_title.clone();
             let output_dir = output_dir.clone();
@@ -369,14 +365,14 @@ pub async fn telegram_download_batch(
                                 + skipped.load(std::sync::atomic::Ordering::Relaxed);
                             let percent = (done as f64 / total_files as f64) * 100.0;
 
-                            let _ = app.emit("telegram-batch-file-status", &BatchFileStatus {
+                            emit_event(&host, "telegram-batch-file-status", &BatchFileStatus {
                                 batch_id,
                                 message_id: item.message_id,
                                 status: "skipped".to_string(),
                                 percent: 100.0,
                                 error: None,
                             });
-                            let _ = app.emit("generic-download-progress", &GenericDownloadProgress {
+                            emit_event(&host, "generic-download-progress", &GenericDownloadProgress {
                                 id: batch_id,
                                 title: chat_title,
                                 platform: "telegram".to_string(),
@@ -401,7 +397,7 @@ pub async fn telegram_download_batch(
                 }
 
                 // Emit downloading status
-                let _ = app.emit("telegram-batch-file-status", &BatchFileStatus {
+                emit_event(&host, "telegram-batch-file-status", &BatchFileStatus {
                     batch_id,
                     message_id: item.message_id,
                     status: "downloading".to_string(),
@@ -411,10 +407,10 @@ pub async fn telegram_download_batch(
 
                 let (tx, mut rx) = mpsc::channel::<omniget_core::models::progress::ProgressUpdate>(32);
 
-                let app_progress = app.clone();
+                let host_progress = host.clone();
                 let progress_forwarder = tokio::spawn(async move {
                     while let Some(update) = rx.recv().await {
-                        let _ = app_progress.emit("telegram-batch-file-status", &BatchFileStatus {
+                        emit_event(&host_progress, "telegram-batch-file-status", &BatchFileStatus {
                             batch_id,
                             message_id: item.message_id,
                             status: "downloading".to_string(),
@@ -439,7 +435,7 @@ pub async fn telegram_download_batch(
                 match result {
                     Ok(_) => {
                         completed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        let _ = app.emit("telegram-batch-file-status", &BatchFileStatus {
+                        emit_event(&host, "telegram-batch-file-status", &BatchFileStatus {
                             batch_id,
                             message_id: item.message_id,
                             status: "done".to_string(),
@@ -453,7 +449,7 @@ pub async fn telegram_download_batch(
                             return;
                         }
                         failed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        let _ = app.emit("telegram-batch-file-status", &BatchFileStatus {
+                        emit_event(&host, "telegram-batch-file-status", &BatchFileStatus {
                             batch_id,
                             message_id: item.message_id,
                             status: "error".to_string(),
@@ -468,7 +464,7 @@ pub async fn telegram_download_batch(
                     + skipped.load(std::sync::atomic::Ordering::Relaxed);
                 let percent = (done as f64 / total_files as f64) * 100.0;
 
-                let _ = app.emit("generic-download-progress", &GenericDownloadProgress {
+                emit_event(&host, "generic-download-progress", &GenericDownloadProgress {
                     id: batch_id,
                     title: chat_title,
                     platform: "telegram".to_string(),
@@ -494,7 +490,7 @@ pub async fn telegram_download_batch(
         let skip_count = skipped.load(std::sync::atomic::Ordering::Relaxed);
         let success = fail_count == 0 && !cancel_token.is_cancelled();
 
-        let _ = app.emit("generic-download-complete", &GenericDownloadComplete {
+        emit_event(&host, "generic-download-complete", &GenericDownloadComplete {
             id: batch_id,
             title: chat_title,
             platform: "telegram".to_string(),
@@ -515,9 +511,8 @@ pub async fn telegram_download_batch(
     Ok(batch_id)
 }
 
-#[tauri::command]
 pub async fn telegram_cancel_batch(
-    state: tauri::State<'_, TelegramPluginState>,
+    state: &TelegramPluginState,
     batch_id: u64,
 ) -> Result<(), String> {
     let active = state.active_generic_downloads.lock().await;
@@ -530,9 +525,8 @@ pub async fn telegram_cancel_batch(
     Err("Batch not found".to_string())
 }
 
-#[tauri::command]
 pub async fn telegram_get_thumbnail(
-    state: tauri::State<'_, TelegramPluginState>,
+    state: &TelegramPluginState,
     chat_id: i64,
     chat_type: String,
     message_id: i32,
@@ -549,17 +543,15 @@ pub async fn telegram_get_thumbnail(
     Ok(base64::engine::general_purpose::STANDARD.encode(&data))
 }
 
-#[tauri::command]
 pub async fn telegram_search_media(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, TelegramPluginState>,
+    state: &TelegramPluginState,
     chat_id: i64,
     chat_type: String,
     query: String,
     media_type: Option<String>,
     limit: u32,
 ) -> Result<Vec<TelegramMediaItem>, String> {
-    let fix_extensions = settings_helper::load_settings(&app).telegram.fix_file_extensions;
+    let fix_extensions = settings_helper::load_settings().telegram.fix_file_extensions;
     api::search_media(
         &state.telegram_session,
         chat_id,
@@ -573,9 +565,8 @@ pub async fn telegram_search_media(
     .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
 pub async fn telegram_get_chat_photo(
-    state: tauri::State<'_, TelegramPluginState>,
+    state: &TelegramPluginState,
     chat_id: i64,
     chat_type: String,
 ) -> Result<String, String> {
@@ -590,7 +581,6 @@ pub async fn telegram_get_chat_photo(
     Ok(base64::engine::general_purpose::STANDARD.encode(&data))
 }
 
-#[tauri::command]
 pub async fn telegram_clear_thumbnail_cache() -> Result<(), String> {
     thumbnail_cache::clear_cache().await;
     Ok(())

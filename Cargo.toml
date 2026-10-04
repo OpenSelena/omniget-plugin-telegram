@@ -1,14 +1,12 @@
 [package]
 name = "omniget-plugin-telegram"
-version = "1.2.0"
+version = "1.2.1"
 edition = "2021"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-tauri = { version = "2", features = [] }
-tauri-plugin-store = "2"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
